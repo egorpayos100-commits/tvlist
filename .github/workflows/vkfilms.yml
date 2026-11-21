@@ -1,0 +1,40 @@
+name: VK Films Harvester
+
+on:
+  schedule:
+    # 08:00 МСК = 05:00 UTC
+    - cron: '0 5 * * *'
+  workflow_dispatch:  # можно запустить вручную
+
+jobs:
+  harvest:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout tvlist
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run VK harvester
+        run: python vkfilms.py
+
+      - name: Commit updated playlist
+        run: |
+          git config user.name "efir-bot"
+          git config user.email "bot@efir.tv"
+          git add efir-films.m3u
+          if git diff --cached --quiet; then
+            echo "Нет изменений — коммит не нужен"
+          else
+            DATE=$(date -u '+%Y-%m-%d %H:%M UTC')
+            git commit -m "🎬 VK фильмы: авто-обновление ${DATE}"
+            git push
+          fi
