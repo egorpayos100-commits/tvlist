@@ -253,6 +253,7 @@ https://stream3.cinerama.uz/1439/tracks-v2a1/mono.m3u8
 # Заглушку в эфире ловит само приложение (0.41 guardAgainstSlate), так что уехать на чистый край оно
 # способно и без правки этого файла.
 #EXTINF:-1 tvg-id="cinema" epg-id="2754" group-title="Кино",Cinema
+https://stream8.cinerama.uz/1227/tracks-v1a1/mono.m3u8
 https://stream2.cinerama.uz/1227/tracks-v1a1/mono.m3u8
 https://stream1.cinerama.uz/1227/tracks-v1a1/mono.m3u8
 
@@ -272,8 +273,8 @@ https://fs.uplink.kz/viju_tv1000/mono.m3u8?token=onlinetv
 # стала одноместной — кинерамовские рёбра stream1/1225 (x2.1) и stream8/1225 (x2.2) сняты, stream3
 # отдаёт 28 КБ/с при нужных 214, 46.53.200.153/play/a01h — 404.
 #EXTINF:-1 tvg-id="tv1000-action" epg-id="125" group-title="Кино",TV1000 Action
+https://stream8.cinerama.uz/1225/tracks-v1a1/mono.m3u8
 http://46.53.200.153:7777/play/a01h/index.m3u8
-https://fs.uplink.kz/viju_tv1000_action/mono.m3u8?token=onlinetv
 
 # TV1000 Русское кино. 24.10 18:55: в строке один адрес, переключения источника нет. Мастер
 # stream1.cinerama.uz/1059 перечисляет три дорожки: tracks-v3a1 852x480, tracks-v2a1 1280x720
@@ -285,7 +286,8 @@ https://fs.uplink.kz/viju_tv1000_action/mono.m3u8?token=onlinetv
 # Русское кино (у него 1059), и на stream8 она сегодня редиректит на /blocked/. Строка «TV 1000» уже
 # играет 1080p с mcquack.net/110 (AVERAGE-BANDWIDTH 3.71 Мбит/с), поэтому менять её не на что.
 #EXTINF:-1 tvg-id="tv1000-russkoe-kino" epg-id="267" group-title="Кино",TV1000 Русское кино
-https://stream1.cinerama.uz/1059/tracks-v1a1/mono.m3u8
+https://stream8.cinerama.uz/1059/tracks-v1a1/mono.m3u8
+https://stream2.cinerama.uz/1059/tracks-v1a1/mono.m3u8
 
 # TV1000 Comedy: постоянной ссылкой закрыли дыру, которую долго нечем было закрыть — адрес с
 # 46.53.200.153 отдаёт H.264 + MP2 [rus] и [eng], SDT «viju+ Comedy HD», срок в URL нет.
@@ -309,10 +311,9 @@ http://46.53.200.153:7777/play/Viju_Comedy_HD/index.m3u8
 # у него в сети этот край виден.
 #EXTINF:-1 tvg-id="kinohit" epg-id="542" group-title="Кино",Кинохит
 https://stream8.cinerama.uz/1055/tracks-v1a1/mono.m3u8
-https://fs.uplink.kz/kinohit/mono.m3u8?token=onlinetv
+https://stream2.cinerama.uz/1055/tracks-v1a1/mono.m3u8
 
 #EXTINF:-1 tvg-id="kinomiks" epg-id="644" group-title="Кино",Киномикс
-https://fs.uplink.kz/kinomix/mono.m3u8?token=onlinetv
 http://93.170.254.17/Kinomiks/index.m3u8
 
 #EXTINF:-1 tvg-id="viasat-premiere" epg-id="1013" group-title="Кино",Виасат Premiere
@@ -327,7 +328,6 @@ http://176.118.197.101/Evrokino/index.m3u8
 
 #EXTINF:-1 tvg-id="dom-kino-premium" epg-id="2020" group-title="Кино",Дом Кино Премиум
 http://88.212.15.50/live/test_dom_kino_premium/playlist.m3u8
-https://fs.uplink.kz/dom_kino_premium/mono.m3u8?token=onlinetv
 
 #EXTINF:-1 tvg-id="kinokomediya" epg-id="821" group-title="Кино",Кинокомедия
 https://fs.uplink.kz/kinokomedia/mono.m3u8?token=onlinetv
