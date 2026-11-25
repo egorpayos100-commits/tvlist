@@ -31,6 +31,7 @@ FILMS_FILE = "efir-films.m3u"
 GROUP_TITLE = "Фильмы"
 MAX_NEW_FILMS = 40      # максимум новых фильмов за один прогон
 FEATURED_TOP = 3        # сколько первых новинок помечать tvg-featured="1"
+PINNED_TOP_IDS = ("ua-home-alone-1", "ua-home-alone-2")
 
 TMDB_KEY = os.environ.get("TMDB_KEY") or "269d08b7a165c8d4f1ed8ae4612811da"
 TMDB_API = "https://api.themoviedb.org/3"
@@ -273,8 +274,19 @@ def norm_title(name, year):
 
 # ── основной сценарий ──────────────────────────────────────────────────────
 
+def split_pinned(body):
+    """Держит выбранные вручную фильмы выше новинок автопополнения."""
+    blocks = re.findall(r'(?ms)^#EXTINF.*?(?=^#EXTINF|\Z)', body)
+    pinned, rest = [], []
+    for block in blocks:
+        match = re.search(r'tvg-id="([^"]+)"', block)
+        (pinned if match and match.group(1) in PINNED_TOP_IDS else rest).append(block)
+    return "".join(pinned), "".join(rest)
+
+
 def main():
     body, known, titles = load_existing(FILMS_FILE)
+    pinned, body = split_pinned(body)
     print("Уже в плейлисте: %d фильмов" % len(titles))
 
     # собираем свежие видео со всех стен, порядок = от новых к старым
@@ -312,7 +324,7 @@ def main():
         if nk in titles:                  # этот фильм уже есть (или дубль загрузки)
             continue
         titles.add(nk)
-        key, entry = build_entry(v, meta, added < FEATURED_TOP)
+        key, entry = build_entry(v, meta, added < FEATURED_TOP and not pinned)
         blocks.append(entry)
         added += 1
         print("   + %s (%s)  [%s_%s]" % (meta["name"], meta["year"], key.split("_")[0], key.split("_")[1]))
@@ -321,7 +333,7 @@ def main():
         print("Новых фильмов нет — файл не меняется.")
         return
 
-    out = "#EXTM3U\n" + "".join(blocks) + body
+    out = "#EXTM3U\n" + pinned + "".join(blocks) + body
     if not out.endswith("\n"):
         out += "\n"
     with open(FILMS_FILE, "w", encoding="utf-8") as f:
