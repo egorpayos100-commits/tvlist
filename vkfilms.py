@@ -30,6 +30,22 @@ WALLS = [
 FILMS_FILE = "efir-films.m3u"
 GROUP_TITLE = "Фильмы"
 FEATURED_TOP = 3        # сколько первых новинок помечать tvg-featured="1"
+SEASONAL_TOP = 3
+SEASONAL_TITLE_PRIORITY = {
+    "один дома": 100,
+    "один дома 2 затерянный в нью йорке": 99,
+    "крепкий орешек": 98,
+}
+SEASONAL_TITLE_MARKERS = (
+    "рождеств", "новый год", "новогод", "один дома", "санта",
+    "дед мороз", "christmas", "xmas", "santa claus", "new year",
+    "scrooge", "скрудж", "гринч", "полярный экспресс",
+)
+SEASONAL_DESCRIPTION_MARKERS = (
+    "рождеств", "новый год", "новогод", "дед мороз", "санта-клаус",
+    "санта клаус", "ёлка", "елка", "снеговик", "christmas",
+    "new year", "santa claus",
+)
 MIN_FILM_SECONDS = 45 * 60
 MAX_FILM_SECONDS = 4 * 3600 + 30 * 60
 TITLE_ALIASES = {
@@ -357,6 +373,44 @@ def _entry_key(entry):
     return "%s_%s" % match.groups() if match else None
 
 
+def seasonal_score(name, description=""):
+    key = norm_title(name, None).split("|", 1)[0]
+    priority = SEASONAL_TITLE_PRIORITY.get(key)
+    if priority:
+        return priority
+    title = (name or "").casefold()
+    text = (description or "").casefold()
+    score = 0
+    if any(marker in title for marker in SEASONAL_TITLE_MARKERS):
+        score += 3
+    if any(marker in text for marker in SEASONAL_DESCRIPTION_MARKERS):
+        score += 1
+    return score
+
+
+def mark_seasonal_entries(text):
+    parts = re.split(r'(?=^#EXTINF)', text, flags=re.M)
+    header, entries = parts[0], parts[1:]
+    cleaned, candidates = [], []
+    for index, entry in enumerate(entries):
+        entry = re.sub(r'\s+tvg-seasonal="[^"]*"', "", entry)
+        cleaned.append(entry)
+        attrs = dict(re.findall(r'([\w-]+)="([^"]*)"', entry))
+        name = html.unescape(attrs.get("tvg-name") or _display_name(entry.splitlines()[0]))
+        score = seasonal_score(name, html.unescape(attrs.get("tvg-description", "")))
+        if score:
+            candidates.append((-score, index, name))
+    selected = sorted(candidates)[:SEASONAL_TOP]
+    for _, index, _ in selected:
+        entry = cleaned[index]
+        if ' group-title=' in entry:
+            entry = entry.replace(' group-title=', ' tvg-seasonal="1" group-title=', 1)
+        else:
+            entry = entry.replace('\n', ' tvg-seasonal="1"\n', 1)
+        cleaned[index] = entry
+    return header + "".join(cleaned), [name for _, _, name in selected]
+
+
 def merge_recent_entries(body, new_entries, dates):
     parts = re.split(r'(?=^#EXTINF)', body, flags=re.M)
     header, entries = parts[0], parts[1:]
@@ -444,16 +498,30 @@ def main():
         print("   + %s (%s)  [%s_%s]" % (
             meta["name"], meta["year"], key.split("_")[0], key.split("_")[1]))
 
-    if not blocks:
-        print("Новых фильмов нет — файл не меняется.")
-        return
-
-    out = "#EXTM3U\n" + merge_recent_entries(body, blocks, gallery_dates)
+    if blocks:
+        out = "#EXTM3U\n" + merge_recent_entries(body, blocks, gallery_dates)
+    else:
+        out = "#EXTM3U\n" + body
+    out, seasonal_names = mark_seasonal_entries(out)
     if not out.endswith("\n"):
         out += "\n"
+
+    current = ""
+    if os.path.exists(FILMS_FILE):
+        with open(FILMS_FILE, encoding="utf-8") as f:
+            current = f.read()
+    if out == current:
+        print("Новых фильмов нет — файл не меняется.")
+        print("Сезонные баннеры (%d): %s" % (
+            len(seasonal_names), ", ".join(seasonal_names) or "нет"))
+        return
+
     with open(FILMS_FILE, "w", encoding="utf-8") as f:
         f.write(out)
-    print("Добавлено %d фильмов в начало %s" % (added, FILMS_FILE))
+    if added:
+        print("Добавлено %d фильмов в начало %s" % (added, FILMS_FILE))
+    print("Сезонные баннеры (%d): %s" % (
+        len(seasonal_names), ", ".join(seasonal_names) or "нет"))
 
 
 if __name__ == "__main__":
