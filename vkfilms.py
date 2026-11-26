@@ -104,6 +104,33 @@ def parse_widget(widget_html):
     return posts
 
 
+def duration_seconds(label):
+    total = 0
+    for amount, unit in re.findall(r'(\d+)\s+(час\w*|минут\w*|секунд\w*)', (label or "").lower()):
+        value = int(amount)
+        if unit.startswith("час"):
+            total += value * 3600
+        elif unit.startswith("минут"):
+            total += value * 60
+        else:
+            total += value
+    return total
+
+
+def video_kind(video, post_text):
+    text = ((video.get("label") or "") + " " + (post_text or "")).lower()
+    if any(marker in text for marker in ("сериал", "все серии", "сезон", "эпизод", "series", "season", "episode")):
+        return "сериал"
+    if any(marker in text for marker in ("коллекция", "сборник")):
+        return "подборка"
+    seconds = duration_seconds(video.get("label"))
+    if seconds and seconds < 45 * 60:
+        return "короткое видео"
+    if seconds and seconds > 4 * 3600 + 30 * 60:
+        return "многочасовая подборка"
+    return None
+
+
 # ── название и год из подписи видео ────────────────────────────────────────
 
 def parse_title_year(label):
@@ -288,21 +315,26 @@ def main():
         except Exception as e:            # noqa: BLE001
             print("  %-16s ОШИБКА: %s" % (title, e))
             continue
-        videos = [v for p in parse_widget(widget) for v in p["videos"]]
-        print("  %-16s найдено видео: %d" % (title, len(videos)))
-        for v in videos:
-            key = "%s_%s" % (v["oid"].lstrip("-"), v["id"])
-            if key in known or key in seen:
-                continue
-            seen.add(key)
-            fresh.append(v)
+        posts = parse_widget(widget)
+        print("  %-16s найдено видео: %d" % (title, sum(len(p["videos"]) for p in posts)))
+        for post in posts:
+            for v in post["videos"]:
+                key = "%s_%s" % (v["oid"].lstrip("-"), v["id"])
+                if key in known or key in seen:
+                    continue
+                seen.add(key)
+                fresh.append((v, post["text"]))
 
     print("Новых видео-кандидатов: %d" % len(fresh))
 
     added, blocks = 0, []
-    for v in fresh:
+    for v, post_text in fresh:
         if added >= MAX_NEW_FILMS:
             break
+        kind = video_kind(v, post_text)
+        if kind:
+            print("   пропуск (%s): %s" % (kind, v["label"]))
+            continue
         name, year = parse_title_year(v["label"])
         if len(name) < 2:
             continue
@@ -311,7 +343,8 @@ def main():
             print("   пропуск (нет в TMDB): %s" % name)
             continue
         nk = norm_title(meta["name"], meta["year"])
-        if nk in titles:                  # этот фильм уже есть (или дубль загрузки)
+        if nk in titles:
+            print("   уже есть: %s (%s)" % (meta["name"], meta["year"]))
             continue
         titles.add(nk)
         key, entry = build_entry(v, meta, added < FEATURED_TOP)
