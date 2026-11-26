@@ -203,27 +203,34 @@ def quality_marker(value):
 
 def video_quality(video):
     label = video.get("label") or ""
-    match = re.search(
-        r'(?i)(?<![a-z0-9])(HDTS|TS|CAMRIP|HDCAM|TELESYNC|WORKPRINT|SCREENER)(?![a-z0-9])',
-        label,
+    description = video.get("description") or ""
+    patterns = (
+        r'(?i)(?<![a-z0-9])(HDTS|TS|TSQCAM|TELESYNC|CAMRIP|HDCAM|WORKPRINT|SCREENER)(?![a-z0-9])',
+        r'(?i)(?:\[|\()\s*(TS|CAM)\s*(?:\]|\))',
+        r'(?:^|[\s|])(CAM)(?:$|[\s|])',
+        r'(?i)(?:качество|quality)\s*[:=-]\s*(HDTS|TS|CAMRIP|HDCAM|CAM|TELESYNC|WORKPRINT|SCREENER)\b',
     )
-    if not match:
-        match = re.search(r'(?i)(?:\[|\()\s*(TS|CAM)\s*(?:\]|\))', label)
-    if not match:
-        match = re.search(r'(?:^|[\s|])(CAM)(?:$|[\s|])', label)
-    if not match:
-        match = re.search(
-            r'(?i)(?:качество|quality)\s*[:=-]\s*'
-            r'(HDTS|TS|CAMRIP|HDCAM|CAM|TELESYNC|WORKPRINT|SCREENER)\b',
-            video.get("description") or "",
-        )
-    return quality_marker(match.group(1)) if match else None
+    for pattern in patterns:
+        match = re.search(pattern, label)
+        if not match and pattern != patterns[2]:
+            match = re.search(pattern, description)
+        if match:
+            return quality_marker(match.group(1))
+    return None
 
 
 def is_good_quality(video):
+    if video_quality(video):
+        return False
+    text = "%s\n%s" % (video.get("label") or "", video.get("description") or "")
+    if not re.search(
+        r'(?i)(?<![a-z0-9])(?:2160p|1080p|720p|4k|uhd|fhd|blu[ -]?ray|'
+        r'bd(?:rip|remux)|brrip|web[ -]?(?:dl|rip)|hdrip|dvdrip)(?![a-z0-9])',
+        text,
+    ):
+        return False
     return (
-        video_quality(video) is None
-        and int(video.get("width") or 0) >= 1280
+        int(video.get("width") or 0) >= 1280
         and int(video.get("height") or 0) >= 720
     )
 
@@ -390,9 +397,11 @@ def load_existing(path):
         name = re.sub(r'\((\d{4})\)\s*$', "", disp)
         year = attrs.get("tvg-year") or (ym.group(1) if ym else None)
         title_key = norm_title(name, year)
+        quality = quality_marker(attrs.get("tvg-quality") or attrs.get("quality"))
         titles.setdefault(title_key, []).append({
             "entry": entry,
-            "quality": quality_marker(attrs.get("tvg-quality") or attrs.get("quality")),
+            "quality": quality,
+            "good": quality is None,
             "pending": False,
         })
     body = text
@@ -554,8 +563,8 @@ def main():
         quality = video_quality(v)
         good = is_good_quality(v)
         matches = title_entries.get(nk, [])
-        good_matches = [item for item in matches if item["quality"] is None]
-        low_matches = [item for item in matches if item["quality"] is not None]
+        good_matches = [item for item in matches if item["good"]]
+        low_matches = [item for item in matches if not item["good"]]
 
         if good_matches:
             if low_matches:
@@ -588,6 +597,7 @@ def main():
         title_entries[nk] = [{
             "entry": entry,
             "quality": quality,
+            "good": good,
             "pending": True,
         }]
         action = "замена TS/CAM" if had_existing else "+"
