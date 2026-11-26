@@ -370,13 +370,9 @@ https://stream1.cinerama.uz/1043/index.m3u8
 # 78.29.1.71, itdc.ge, kyivstar, 125.210.152.18.
 # ПОПРАВКА: 20.10 я записал, что mcquack/177 «отдаёт НЕ-HLS» — 23.10 этот же путь отдаёт чистый
 # HLS с русским звуком. «Проверен мёртвым» не бывает вечным, перепроверять в день сборки.
-# 19.11.2026: discovery_hungary — одна дорожка без метки, 102.129.186.182 — [ita], русского нет.
-# Вернул русскую через cinerama 1039: «rus a1» DEFAULT=YES + «eng a2», 852x480, avc1.4d4029 +
-# mp4a.40.2, сегмент 0,97 МБ / 2,6 с = 375 КБ/с при нужных 192 (запас x2). Рёбра те же: stream8 и
-# stream1; stream3 отдал 117 КБ за 20 с — убран. Оба адреса держать: у cinerama рёбра меняются.
 #EXTINF:-1 tvg-id="discovery" epg-id="325" group-title="Познавательные",Discovery
-https://stream8.cinerama.uz/1039/index.m3u8
-https://stream1.cinerama.uz/1039/index.m3u8
+https://s7.iptv-24.net/1039/index.m3u8
+https://stream2.cinerama.uz/1039/tracks-v1a1/mono.m3u8
 
 # National Geographic. 23.10 16:40: основной — stream.mcquack.net/116 (постоянный URL, без срока):
 # SDT читается как «National Geographic HD», H.264 + AAC с дорогой [rus], сегмент 2,3 МБ / 5 с =
