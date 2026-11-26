@@ -144,6 +144,8 @@ def fetch_gallery(screen_name, token):
             "hash": item.get("access_key") or None,
             "date": int(item.get("date") or 0),
             "duration": int(item.get("duration") or 0),
+            "width": int(item.get("width") or 0),
+            "height": int(item.get("height") or 0),
             "description": (item.get("description") or "").strip(),
         })
     return videos
@@ -188,6 +190,42 @@ def video_kind(video, post_text=""):
     if seconds and seconds > MAX_FILM_SECONDS:
         return "многочасовая подборка"
     return None
+
+
+def quality_marker(value):
+    token = (value or "").strip().upper()
+    if re.search(r'(?:^|[^A-Z])(?:HDTS|TS|TSQCAM|TELESYNC)(?:$|[^A-Z])', token):
+        return "TS"
+    if re.search(r'(?:^|[^A-Z])(?:HDCAM|CAMRIP|CAM|WORKPRINT|SCREENER)(?:$|[^A-Z])', token):
+        return "CAM"
+    return None
+
+
+def video_quality(video):
+    label = video.get("label") or ""
+    match = re.search(
+        r'(?i)(?<![a-z0-9])(HDTS|TS|CAMRIP|HDCAM|TELESYNC|WORKPRINT|SCREENER)(?![a-z0-9])',
+        label,
+    )
+    if not match:
+        match = re.search(r'(?i)(?:\[|\()\s*(TS|CAM)\s*(?:\]|\))', label)
+    if not match:
+        match = re.search(r'(?:^|[\s|])(CAM)(?:$|[\s|])', label)
+    if not match:
+        match = re.search(
+            r'(?i)(?:качество|quality)\s*[:=-]\s*'
+            r'(HDTS|TS|CAMRIP|HDCAM|CAM|TELESYNC|WORKPRINT|SCREENER)\b',
+            video.get("description") or "",
+        )
+    return quality_marker(match.group(1)) if match else None
+
+
+def is_good_quality(video):
+    return (
+        video_quality(video) is None
+        and int(video.get("width") or 0) >= 1280
+        and int(video.get("height") or 0) >= 720
+    )
 
 
 # ── название и год из подписи видео ────────────────────────────────────────
@@ -300,11 +338,13 @@ def _attr(name, value):
     return ' %s="%s"' % (name, v) if v else ""
 
 
-def build_entry(video, meta, featured):
+def build_entry(video, meta, featured, fallback=""):
     oid_abs = video["oid"].lstrip("-")
     key = "%s_%s" % (oid_abs, video["id"])
     name = meta["name"]
     year = meta["year"]
+    old = dict(re.findall(r'([\w-]+)="([^"]*)"', fallback or ""))
+    quality = video_quality(video)
 
     line = "#EXTINF:-1"
     line += _attr("tvg-id", "vk-%s-%s" % (oid_abs, video["id"]))
@@ -312,9 +352,13 @@ def build_entry(video, meta, featured):
     line += _attr("tvg-logo", meta["poster"])
     line += _attr("tvg-backdrop", meta["backdrop"])
     line += _attr("tvg-year", year)
+    line += _attr("tvg-rating", old.get("tvg-rating"))
+    line += _attr("tvg-imdb", old.get("tvg-imdb"))
     line += _attr("tvg-genre", meta["genres"])
     line += _attr("tvg-description", meta["description"])
-    line += _attr("tvg-trailer", meta["trailer"])
+    line += _attr("tvg-trailer", meta["trailer"] or old.get("tvg-trailer"))
+    line += _attr("tvg-gain", old.get("tvg-gain"))
+    line += _attr("tvg-quality", quality)
     if featured:
         line += ' tvg-featured="1"'
     line += _attr("group-title", GROUP_TITLE)
@@ -327,9 +371,9 @@ def build_entry(video, meta, featured):
 
 
 def load_existing(path):
-    """Возвращает (тело_плейлиста_без_#EXTM3U, ключи_oid_id, названия_фильмов)."""
+    """Возвращает тело плейлиста, известные VK id и записи по названию фильма."""
     if not os.path.exists(path):
-        return "", set(), set()
+        return "", set(), {}
     with open(path, encoding="utf-8") as f:
         text = f.read()
     known = set()
@@ -337,16 +381,32 @@ def load_existing(path):
         known.add("%s_%s" % m.groups())
     for m in re.finditer(r'oid=(-?\d+)&(?:amp;)?id=(\d+)', text):
         known.add("%s_%s" % (m.group(1).lstrip("-"), m.group(2)))
-    titles = set()
-    for m in re.finditer(r'^#EXTINF.*$', text, re.M):
-        disp = _display_name(m.group(0))
+    titles = {}
+    parts = re.split(r'(?=^#EXTINF)', text, flags=re.M)
+    for entry in parts[1:]:
+        attrs = dict(re.findall(r'([\w-]+)="([^"]*)"', entry))
+        disp = _display_name(entry.splitlines()[0])
         ym = re.search(r'\((\d{4})\)\s*$', disp)
-        titles.add(norm_title(re.sub(r'\((\d{4})\)\s*$', "", disp),
-                              ym.group(1) if ym else None))
+        name = re.sub(r'\((\d{4})\)\s*$', "", disp)
+        year = attrs.get("tvg-year") or (ym.group(1) if ym else None)
+        title_key = norm_title(name, year)
+        titles.setdefault(title_key, []).append({
+            "entry": entry,
+            "quality": quality_marker(attrs.get("tvg-quality") or attrs.get("quality")),
+            "pending": False,
+        })
     body = text
     if body.lstrip().startswith("#EXTM3U"):
         body = body.lstrip()[len("#EXTM3U"):].lstrip("\n")
     return body, known, titles
+
+
+def remove_entries(body, dropped):
+    if not dropped:
+        return body
+    dropped = set(dropped)
+    parts = re.split(r'(?=^#EXTINF)', body, flags=re.M)
+    return parts[0] + "".join(entry for entry in parts[1:] if entry not in dropped)
 
 
 def _display_name(line):
@@ -438,8 +498,8 @@ def merge_recent_entries(body, new_entries, dates):
 # ── основной сценарий ──────────────────────────────────────────────────────
 
 def main():
-    body, known, titles = load_existing(FILMS_FILE)
-    print("Уже в плейлисте: %d фильмов" % len(titles))
+    body, known, title_entries = load_existing(FILMS_FILE)
+    print("Уже в плейлисте: %d фильмов" % len(title_entries))
 
     try:
         token = anonymous_token()
@@ -470,7 +530,9 @@ def main():
     fresh.sort(key=lambda v: v.get("date", 0), reverse=True)
     print("Новых видео-кандидатов: %d" % len(fresh))
 
-    added, blocks = 0, []
+    additions = {}
+    replaced_entries = []
+    replaced = 0
     for v in fresh:
         kind = video_kind(v, v.get("description"))
         if kind:
@@ -487,19 +549,55 @@ def main():
             print("   пропуск (короткометражка): %s (%s мин)" % (
                 meta["name"], meta["runtime"]))
             continue
+
         nk = norm_title(meta["name"], meta["year"])
-        if nk in titles:
+        quality = video_quality(v)
+        good = is_good_quality(v)
+        matches = title_entries.get(nk, [])
+        good_matches = [item for item in matches if item["quality"] is None]
+        low_matches = [item for item in matches if item["quality"] is not None]
+
+        if good_matches:
+            if low_matches:
+                replaced_entries.extend(
+                    item["entry"] for item in low_matches if not item["pending"]
+                )
+                title_entries[nk] = good_matches
+                print("   убран лишний TS/CAM-дубль: %s (%s)" % (
+                    meta["name"], meta["year"]))
             print("   уже есть: %s (%s)" % (meta["name"], meta["year"]))
             continue
-        titles.add(nk)
-        key, entry = build_entry(v, meta, added < FEATURED_TOP)
-        blocks.append(entry)
-        added += 1
-        print("   + %s (%s)  [%s_%s]" % (
-            meta["name"], meta["year"], key.split("_")[0], key.split("_")[1]))
+        if matches and not good:
+            print("   пропуск (не заменяет TS/CAM): %s (%s)" % (
+                meta["name"], meta["year"]))
+            continue
 
-    if blocks:
-        out = "#EXTM3U\n" + merge_recent_entries(body, blocks, gallery_dates)
+        had_existing = any(not item["pending"] for item in matches)
+        fallback = matches[0]["entry"] if matches else ""
+        for item in matches:
+            if item["pending"]:
+                additions.pop(nk, None)
+            else:
+                replaced_entries.append(item["entry"])
+                replaced += 1
+
+        key, entry = build_entry(
+            v, meta, len(additions) < FEATURED_TOP, fallback
+        )
+        additions[nk] = entry
+        title_entries[nk] = [{
+            "entry": entry,
+            "quality": quality,
+            "pending": True,
+        }]
+        action = "замена TS/CAM" if had_existing else "+"
+        print("   %s %s (%s)  [%s_%s]" % (
+            action, meta["name"], meta["year"], key.split("_")[0], key.split("_")[1]))
+
+    blocks = list(additions.values())
+    if blocks or replaced_entries:
+        clean_body = remove_entries(body, replaced_entries)
+        out = "#EXTM3U\n" + merge_recent_entries(clean_body, blocks, gallery_dates)
     else:
         out = "#EXTM3U\n" + body
     out, seasonal_names = mark_seasonal_entries(out)
@@ -518,8 +616,11 @@ def main():
 
     with open(FILMS_FILE, "w", encoding="utf-8") as f:
         f.write(out)
-    if added:
-        print("Добавлено %d фильмов в начало %s" % (added, FILMS_FILE))
+    if blocks:
+        print("Добавлено или обновлено %d фильмов в начале %s" % (
+            len(blocks), FILMS_FILE))
+    if replaced:
+        print("Заменено низкокачественных копий: %d" % replaced)
     print("Сезонные баннеры (%d): %s" % (
         len(seasonal_names), ", ".join(seasonal_names) or "нет"))
 
