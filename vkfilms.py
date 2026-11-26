@@ -129,6 +129,8 @@ def parse_title_year(label):
     title = re.sub(r'\b\d{4}\b', " ", title)
     title = re.sub(r'\[[^\]]*\]', " ", title)
     title = re.sub(r'\s+', " ", title).strip(" .|·-,–—-")
+    if not title:
+        title = s.split("(")[0].strip()
     return title, year
 
 
