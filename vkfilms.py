@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-VK Film Harvester — собирает свежие фильмы со стен VK и обновляет efir-films.m3u.
+VK Film Harvester — собирает свежие фильмы из галерей VK Видео.
 
-Источник — анонимный виджет сообщества (vk.com/widget_community.php), работает
-без токенов и логина. Метаданные (постер, фон, год, жанры, описание, трейлер)
-подтягиваются из TMDB. Новинки добавляются в НАЧАЛО плейлиста.
+Источник — анонимный API catalog.getVideo, который использует страница
+vkvideo.ru/@group/all. Метаданные (постер, фон, год, жанры, описание, трейлер)
+подтягиваются из TMDB. Новинки добавляются в НАЧАЛО плейлиста по дате загрузки.
 
 Запускается GitHub Actions каждое утро в 08:00 МСК.
 """
@@ -29,8 +29,16 @@ WALLS = [
 
 FILMS_FILE = "efir-films.m3u"
 GROUP_TITLE = "Фильмы"
-MAX_NEW_FILMS = 40      # максимум новых фильмов за один прогон
 FEATURED_TOP = 3        # сколько первых новинок помечать tvg-featured="1"
+MIN_FILM_SECONDS = 45 * 60
+MAX_FILM_SECONDS = 4 * 3600 + 30 * 60
+TITLE_ALIASES = {
+    "чемпион с мадон сок": ("Чемпион", 2018),
+    "гильдия убийств": ("Гильдия убийц", 2024),
+    "хартленд": ("В сердце Нашвилла", 2026),
+}
+VK_API = "https://api.vkvideo.ru/method/"
+VK_CLIENT_ID = "52461373"
 
 TMDB_KEY = os.environ.get("TMDB_KEY") or "269d08b7a165c8d4f1ed8ae4612811da"
 TMDB_API = "https://api.themoviedb.org/3"
@@ -58,11 +66,71 @@ def _get(url, encoding="utf-8", headers=None, tries=3):
     raise last
 
 
-def fetch_widget(gid):
-    """HTML виджета сообщества: свежие посты + видео, анонимно."""
-    url = ("https://vk.com/widget_community.php?app=0&width=300&_ver=1"
-           "&gid=%s&mode=4&w=300" % gid)
-    return _get(url, encoding="cp1251", headers={"Cookie": "remixlang=0"})
+def _post_json(url, params, token=None, tries=3, method="POST"):
+    headers = {
+        "User-Agent": UA,
+        "Origin": "https://vkvideo.ru",
+        "Referer": "https://vkvideo.ru/",
+    }
+    if token:
+        headers["Authorization"] = "Bearer " + token
+    query = urllib.parse.urlencode(params)
+    if method == "POST":
+        headers["Content-Type"] = "application/x-www-form-urlencoded"
+        body = query.encode()
+    else:
+        body = None
+        url += ("&" if "?" in url else "?") + query
+    last = None
+    for _ in range(tries):
+        try:
+            req = urllib.request.Request(url, data=body, headers=headers, method=method)
+            with urllib.request.urlopen(req, timeout=60) as r:
+                return json.loads(r.read().decode("utf-8"))
+        except Exception as e:            # noqa: BLE001
+            last = e
+            time.sleep(2)
+    raise last
+
+
+def anonymous_token():
+    payload = _post_json("https://login.vk.ru/", {
+        "act": "get_anonym_token",
+        "client_id": VK_CLIENT_ID,
+        "scopes": "",
+        "isApiOauthAnonymEnabled": "false",
+    }, method="GET")
+    token = (payload.get("data") or {}).get("access_token")
+    if not token:
+        raise RuntimeError("VK не вернул анонимный токен")
+    return token
+
+
+def fetch_gallery(screen_name, token):
+    payload = _post_json(VK_API + "catalog.getVideo", {
+        "v": "5.289",
+        "client_id": VK_CLIENT_ID,
+        "vk_platform": "vkvideo",
+        "url": "https://vkvideo.ru/@%s/all" % screen_name,
+        "need_blocks": "1",
+        "applied_toggles": "[]",
+        "enabled_features": "[]",
+    }, token)
+    response = payload.get("response")
+    if not isinstance(response, dict):
+        raise RuntimeError("VK не вернул видеогалерею")
+    videos = []
+    for item in response.get("videos") or []:
+        videos.append({
+            "oid": str(item.get("owner_id") or ""),
+            "id": str(item.get("id") or ""),
+            "label": (item.get("title") or "").strip(),
+            "hash": item.get("access_key") or None,
+            "date": int(item.get("date") or 0),
+            "duration": int(item.get("duration") or 0),
+            "description": (item.get("description") or "").strip(),
+        })
+    return videos
 
 
 def tmdb_json(path):
@@ -71,40 +139,11 @@ def tmdb_json(path):
     return json.loads(_get(url, encoding="utf-8"))
 
 
-# ── разбор виджета ─────────────────────────────────────────────────────────
+# ── фильтрация видео ────────────────────────────────────────────────────────
 
-def parse_widget(widget_html):
-    """Возвращает список постов: [{date, text, videos:[{oid,id,label,hash}]}]."""
-    posts = []
-    for chunk in re.split(r'<div id="wpt-\d+_\d+"', widget_html)[1:]:
-        d = re.search(r'class="wcommunity_post_date"[^>]*>([^<]+)<', chunk)
-        date = d.group(1).strip() if d else ""
-        t = re.search(r'class="wall_post_text"[^>]*>(.*?)</div>', chunk, re.S)
-        text = ""
-        if t:
-            text = re.sub(r'<[^>]+>', " ", t.group(1))
-            text = re.sub(r'\s+', " ", html.unescape(text)).strip()
-
-        videos = []
-        for m in re.finditer(
-                r'data-video="(-?\d+)_(\d+)"[^>]*?aria-label="([^"]*)"', chunk):
-            videos.append({
-                "oid": m.group(1),
-                "id": m.group(2),
-                "label": html.unescape(m.group(3)).strip(),
-                "hash": None,
-            })
-        # hash из ссылки (нужен для части видео)
-        for hm in re.finditer(r'href="/video(-?\d+_\d+)\?([^"]+)"', chunk):
-            hh = re.search(r'hash=([0-9a-f]+)', hm.group(2))
-            for v in videos:
-                if "%s_%s" % (v["oid"], v["id"]) == hm.group(1):
-                    v["hash"] = hh.group(1) if hh else None
-        posts.append({"date": date, "text": text, "videos": videos})
-    return posts
-
-
-def duration_seconds(label):
+def duration_seconds(label, seconds=None):
+    if seconds is not None:
+        return int(seconds or 0)
     total = 0
     for amount, unit in re.findall(r'(\d+)\s+(час\w*|минут\w*|секунд\w*)', (label or "").lower()):
         value = int(amount)
@@ -117,16 +156,20 @@ def duration_seconds(label):
     return total
 
 
-def video_kind(video, post_text):
+def video_kind(video, post_text=""):
     text = ((video.get("label") or "") + " " + (post_text or "")).lower()
-    if any(marker in text for marker in ("сериал", "все серии", "сезон", "эпизод", "series", "season", "episode")):
+    if any(marker in text for marker in (
+            "сериал", "все серии", "сезон", "эпизод", "серия",
+            "series", "season", "episode")):
         return "сериал"
-    if any(marker in text for marker in ("коллекция", "сборник")):
-        return "подборка"
-    seconds = duration_seconds(video.get("label"))
-    if seconds and seconds < 45 * 60:
+    if any(marker in text for marker in (
+            "коллекция", "сборник", "трейлер", "trailer",
+            "клип", "clip", "анонс", "teaser")):
+        return "подборка или клип"
+    seconds = duration_seconds(video.get("label"), video.get("duration"))
+    if seconds and seconds < MIN_FILM_SECONDS:
         return "короткое видео"
-    if seconds and seconds > 4 * 3600 + 30 * 60:
+    if seconds and seconds > MAX_FILM_SECONDS:
         return "многочасовая подборка"
     return None
 
@@ -136,13 +179,16 @@ def video_kind(video, post_text):
 def parse_title_year(label):
     """«Одиссея | The Odyssey (2026) длительностью 2 часа…» -> («Одиссея», 2026)."""
     s = html.unescape(label or "").strip()
-    s = re.sub(r'^(Видео|Video)\s+', "", s, flags=re.I)
+    s = re.sub(r'^(Видео|Video|Фильм)\s+', "", s, flags=re.I)
     # отрезаем служебный хвост VK (длительность / возрастное ограничение)
     s = re.split(r'\s+(?:длительностью|продолжительностью|Duration|Видео с возрастн)',
                  s, flags=re.I)[0]
+    s = re.split(r',\s*(?:смотреть|скачать|онлайн)\b', s, flags=re.I)[0]
 
     year = None
-    my = re.search(r'\((\d{4})', s)
+    my = re.search(r'\(((?:19|20)\d{2})', s)
+    if not my:
+        my = re.search(r'(?:,|\s)((?:19|20)\d{2})\s*$', s)
     if my:
         year = int(my.group(1))
 
@@ -153,7 +199,9 @@ def parse_title_year(label):
     # «Русское название | Original (year)» -> берём русскую часть
     title = title.split("|")[0]
     title = re.split(r'\s+(?:HD|4K|UHD|Дубляж|Локализ)', title, flags=re.I)[0]
-    title = re.sub(r'\b\d{4}\b', " ", title)
+    title = re.sub(r',\s*(?:19|20)\d{2}\s*$', "", title)
+    if year:
+        title = re.sub(r'\b(?:19|20)\d{2}\b', " ", title)
     title = re.sub(r'\[[^\]]*\]', " ", title)
     title = re.sub(r'\s+', " ", title).strip(" .|·-,–—-")
     if not title:
@@ -174,7 +222,9 @@ def _best(results, year):
 
 def tmdb_lookup(title, year):
     """Возвращает метаданные фильма или None."""
-    query = urllib.parse.quote(title)
+    alias_key = re.sub(r'\s+', " ", title.strip().casefold())
+    query_title, year = TITLE_ALIASES.get(alias_key, (title, year))
+    query = urllib.parse.quote(query_title)
     search = "/search/movie?language=ru-RU&query=%s" % query
     if year:
         search += "&year=%d" % year
@@ -220,6 +270,7 @@ def tmdb_lookup(title, year):
         "genres": genres,
         "description": (det.get("overview") or "").strip(),
         "trailer": trailer or "",
+        "runtime": int(det.get("runtime") or 0),
     }
 
 
@@ -294,10 +345,40 @@ def _display_name(line):
 
 
 def norm_title(name, year):
-    """Ключ дедупликации по названию: «Джейсон Борн» (2016) и (2016) — одно и то же."""
-    n = re.sub(r'[^\w\s]', " ", (name or "").lower(), flags=re.U)
+    """Ключ дедупликации по названию без языковой пометки в скобках."""
+    n = re.sub(r'\(\s*укр\.?\s*\)', " ", (name or "").lower(), flags=re.U)
+    n = re.sub(r'[^\w\s]', " ", n, flags=re.U)
     n = re.sub(r'\s+', " ", n).strip()
     return "%s|%s" % (n, year or "")
+
+
+def _entry_key(entry):
+    match = re.search(r'tvg-id="vk-(\d+)-(\d+)"', entry)
+    return "%s_%s" % match.groups() if match else None
+
+
+def merge_recent_entries(body, new_entries, dates):
+    parts = re.split(r'(?=^#EXTINF)', body, flags=re.M)
+    header, entries = parts[0], parts[1:]
+    recent, rest = [], []
+    for entry in entries:
+        key = _entry_key(entry)
+        if key in dates:
+            recent.append((dates[key], entry))
+        else:
+            rest.append(entry)
+    for entry in new_entries:
+        recent.append((dates[_entry_key(entry)], entry))
+    recent.sort(key=lambda item: item[0], reverse=True)
+
+    ordered = []
+    for index, (_, entry) in enumerate(recent):
+        entry = re.sub(r'\s+tvg-featured="1"', "", entry)
+        if index < FEATURED_TOP:
+            entry = entry.replace(' group-title=', ' tvg-featured="1" group-title=', 1)
+        ordered.append(entry)
+    rest = [re.sub(r'\s+tvg-featured="1"', "", entry) for entry in rest]
+    return header + "".join(ordered + rest)
 
 
 # ── основной сценарий ──────────────────────────────────────────────────────
@@ -306,32 +387,38 @@ def main():
     body, known, titles = load_existing(FILMS_FILE)
     print("Уже в плейлисте: %d фильмов" % len(titles))
 
-    # собираем свежие видео со всех стен, порядок = от новых к старым
+    try:
+        token = anonymous_token()
+    except Exception as e:            # noqa: BLE001
+        print("ОШИБКА получения анонимного доступа VK: %s" % e)
+        return 1
+
     fresh = []
     seen = set()
+    gallery_dates = {}
     for gid, title in WALLS:
         try:
-            widget = fetch_widget(gid)
-        except Exception as e:            # noqa: BLE001
+            videos = fetch_gallery(title, token)
+        except Exception as e:        # noqa: BLE001
             print("  %-16s ОШИБКА: %s" % (title, e))
             continue
-        posts = parse_widget(widget)
-        print("  %-16s найдено видео: %d" % (title, sum(len(p["videos"]) for p in posts)))
-        for post in posts:
-            for v in post["videos"]:
-                key = "%s_%s" % (v["oid"].lstrip("-"), v["id"])
-                if key in known or key in seen:
-                    continue
-                seen.add(key)
-                fresh.append((v, post["text"]))
+        print("  %-16s найдено видео: %d" % (title, len(videos)))
+        for v in videos:
+            if not v["oid"] or not v["id"]:
+                continue
+            key = "%s_%s" % (v["oid"].lstrip("-"), v["id"])
+            gallery_dates[key] = v.get("date", 0)
+            if key in known or key in seen:
+                continue
+            seen.add(key)
+            fresh.append(v)
 
+    fresh.sort(key=lambda v: v.get("date", 0), reverse=True)
     print("Новых видео-кандидатов: %d" % len(fresh))
 
     added, blocks = 0, []
-    for v, post_text in fresh:
-        if added >= MAX_NEW_FILMS:
-            break
-        kind = video_kind(v, post_text)
+    for v in fresh:
+        kind = video_kind(v, v.get("description"))
         if kind:
             print("   пропуск (%s): %s" % (kind, v["label"]))
             continue
@@ -342,6 +429,10 @@ def main():
         if not meta:
             print("   пропуск (нет в TMDB): %s" % name)
             continue
+        if meta["runtime"] and meta["runtime"] * 60 < MIN_FILM_SECONDS:
+            print("   пропуск (короткометражка): %s (%s мин)" % (
+                meta["name"], meta["runtime"]))
+            continue
         nk = norm_title(meta["name"], meta["year"])
         if nk in titles:
             print("   уже есть: %s (%s)" % (meta["name"], meta["year"]))
@@ -350,13 +441,14 @@ def main():
         key, entry = build_entry(v, meta, added < FEATURED_TOP)
         blocks.append(entry)
         added += 1
-        print("   + %s (%s)  [%s_%s]" % (meta["name"], meta["year"], key.split("_")[0], key.split("_")[1]))
+        print("   + %s (%s)  [%s_%s]" % (
+            meta["name"], meta["year"], key.split("_")[0], key.split("_")[1]))
 
     if not blocks:
         print("Новых фильмов нет — файл не меняется.")
         return
 
-    out = "#EXTM3U\n" + "".join(blocks) + body
+    out = "#EXTM3U\n" + merge_recent_entries(body, blocks, gallery_dates)
     if not out.endswith("\n"):
         out += "\n"
     with open(FILMS_FILE, "w", encoding="utf-8") as f:
