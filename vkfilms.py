@@ -30,7 +30,7 @@ WALLS = [
 FILMS_FILE = "efir-films.m3u"
 GROUP_TITLE = "Фильмы"
 FEATURED_TOP = 3        # сколько первых новинок помечать tvg-featured="1"
-SEASONAL_TOP = 3
+SEASONAL_TOP = 7
 SEASONAL_TITLE_PRIORITY = {
     "один дома": 100,
     "один дома 2 затерянный в нью йорке": 99,
