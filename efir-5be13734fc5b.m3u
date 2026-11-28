@@ -316,7 +316,7 @@ http://176.118.197.101/Evrokino/index.m3u8
 #EXTINF:-1 tvg-id="dom-kino-premium" epg-id="2020" group-title="Кино",Дом Кино Премиум
 http://88.212.15.50/live/test_dom_kino_premium/playlist.m3u8
 
-#EXTINF:-1 tvg-id="kinokomediya" epg-id="821" group-title="Кино",Кинокомедия
+#EXTINF:-1 tvg-id="kinokomediya" epg-id="821" group-title="Кино" resolver="mnogotv:kinokomediya",Кинокомедия
 https://fs.uplink.kz/kinokomedia/mono.m3u8?token=onlinetv
 
 # Animal Planet. 23.10 16:55: основной — stream.mcquack.net/114 (постоянный URL, без срока):
